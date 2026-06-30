@@ -2,3 +2,4 @@ User-agent: *
 Allow: /
 
 Sitemap: https://lucyundead.github.io/zhilihomepage/sitemap.xml
+Sitemap: https://lucyundead.github.io/zhilihomepage/sitemap.txt
