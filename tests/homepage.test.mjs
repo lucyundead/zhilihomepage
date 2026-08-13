@@ -23,6 +23,28 @@ test("the mobile menu is hidden while closed and closes after navigation", () =>
   assert.match(html, /\.mobile-nav a["']\).*?removeAttribute\(["']open["']\)/s);
 });
 
+test("the homepage uses a compact bounded visual rhythm", () => {
+  const hero = css.match(/(?:^|\n)\.hero \{([^}]*)\}/)?.[1] ?? "";
+  const heroMedia = css.match(/(?:^|\n)\.hero-media \{([^}]*)\}/)?.[1] ?? "";
+  const heroContent = css.match(/(?:^|\n)\.hero-content \{([^}]*)\}/)?.[1] ?? "";
+  const section = css.match(/(?:^|\n)\.section \{([^}]*)\}/)?.[1] ?? "";
+  const sectionHeader = css.match(/(?:^|\n)\.section-header \{([^}]*)\}/)?.[1] ?? "";
+
+  assert.match(hero, /height:\s*470px;/);
+  assert.match(hero, /min-height:\s*440px;/);
+  assert.match(hero, /overflow:\s*hidden;/);
+  assert.match(heroMedia, /width:\s*min\(100%,\s*var\(--wide\)\);/);
+  assert.match(heroMedia, /margin-inline:\s*auto;/);
+  assert.match(
+    heroContent,
+    /padding-left:\s*clamp\(0px,\s*calc\(\(100vw - 390px\) \* 0\.4\),\s*220px\);/,
+  );
+  assert.match(section, /padding:\s*84px 0;/);
+  assert.match(sectionHeader, /margin-bottom:\s*38px;/);
+  assert.match(css, /@media \(max-width: 820px\)[\s\S]*?\.hero \{[^}]*height:\s*510px;/);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.hero \{[^}]*height:\s*490px;/);
+});
+
 test("the page exposes a consistent SHNU scholarly identity", () => {
   const jsonLdMatch = html.match(
     /<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/,
