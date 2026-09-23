@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0d12">
+<title>iOS 手机光谱分析器</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#151922; --panel2:#10141b; --text:#eef2f7;
+    --muted:#9aa6b2; --accent:#4da3ff; --ok:#45d483; --warn:#ffcc66;
+    --border:#2a3340;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+  header{padding:14px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(11,13,18,.92);backdrop-filter:blur(12px);z-index:10}
+  h1{font-size:20px;margin:0}
+  .sub{font-size:12px;color:var(--muted);margin-top:4px}
+  main{max-width:980px;margin:auto;padding:12px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button,.filebtn{
+    border:1px solid var(--border);background:#202735;color:var(--text);
+    padding:10px 13px;border-radius:10px;font-size:15px;cursor:pointer;
+  }
+  button.primary{background:#1769aa;border-color:#2f8bd2}
+  button.good{background:#146c43;border-color:#269d69}
+  button:disabled{opacity:.45}
+  .filebtn input{display:none}
+  .hint{font-size:13px;color:var(--muted);line-height:1.4;margin-top:8px}
+  #stage{position:relative;background:#05070a;border-radius:12px;overflow:hidden;touch-action:none}
+  video,#photo{display:block;width:100%;height:auto;max-height:62vh;object-fit:contain;background:#000}
+  #photo{display:none}
+  #overlay{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:auto}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .field{display:flex;align-items:center;gap:6px;background:var(--panel2);padding:7px 9px;border-radius:9px;border:1px solid var(--border)}
+  .field label{font-size:12px;color:var(--muted)}
+  input[type=number]{width:76px;background:#0e131a;color:var(--text);border:1px solid #364253;border-radius:7px;padding:6px}
+  input[type=range]{width:140px}
+  #plotWrap{background:#0a0d12;border-radius:12px;padding:8px;overflow:hidden}
+  #plot{width:100%;height:310px;display:block}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  @media(max-width:640px){.grid{grid-template-columns:1fr} #plot{height:270px}}
+  .status{font-size:13px;padding:8px 10px;background:#0f141b;border-radius:9px;color:var(--muted)}
+  .status b{color:var(--text)}
+  .pill{font-size:12px;padding:4px 7px;border-radius:999px;background:#263142;color:#cde2ff}
+  details{margin-top:8px}
+  summary{cursor:pointer;color:#cfe3ff}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+  th,td{border-bottom:1px solid #29313c;text-align:right;padding:6px}
+  th:first-child,td:first-child{text-align:left}
+</style>
+</head>
+<body>
+<header>
+  <h1>iOS 手机光谱分析器</h1>
+  <div class="sub">相机拍摄 / 相册导入 · ROI 平均 · 两点/三点波长定标 · 自动找峰 · CSV 导出</div>
+</header>
+
+<main>
+  <div class="card">
+    <div class="row">
+      <button id="startCam" class="primary">打开后置摄像头</button>
+      <button id="shoot" disabled>拍照</button>
+      <label class="filebtn">从相册/相机选择
+        <input id="fileInput" type="file" accept="image/*" capture="environment">
+      </label>
+      <button id="retake" disabled>重新拍</button>
+    </div>
+    <div class="hint">
+      iPhone/iPad Safari：摄像头实时预览通常要求 HTTPS。若直接打开本地 HTML，
+      “从相册/相机选择”仍可调用系统相机，是最稳妥的 iOS 方式。
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="stage">
+      <video id="video" playsinline autoplay muted></video>
+      <img id="photo" alt="spectrum photo">
+      <canvas id="overlay"></canvas>
+    </div>
+
+    <div class="toolbar">
+      <div class="field">
+        <label>采样带高度</label>
+        <input id="band" type="range" min="1" max="80" value="12">
+        <span id="bandVal" class="pill">12 px</span>
+      </div>
+      <button id="analyze" class="good" disabled>分析光谱</button>
+      <button id="flip" disabled>反转波长方向</button>
+      <button id="clearCal" disabled>清除定标</button>
+    </div>
+    <div class="hint">
+      拍照后，拖动图中的蓝色水平线选择光谱中心；程序会对线附近若干像素做垂直平均。
+      尽量让色散方向接近水平。
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div>
+        <b>波长定标</b>
+        <div class="hint">按顺序：输入已知波长 → 点“添加定标点” → 在照片中点对应谱线。至少 2 点。</div>
+        <div class="row" style="margin-top:8px">
+          <div class="field"><label>已知 λ</label><input id="calLambda" type="number" step="0.1" value="546.1"><span>nm</span></div>
+          <button id="addCal" disabled>添加定标点</button>
+          <button id="fitCal" disabled>拟合定标</button>
+        </div>
+        <div id="calList" class="status" style="margin-top:8px">尚未添加定标点。</div>
+      </div>
+      <div>
+        <b>峰值检测</b>
+        <div class="row" style="margin-top:8px">
+          <div class="field"><label>平滑</label><input id="smooth" type="number" min="1" max="31" step="2" value="5"></div>
+          <div class="field"><label>阈值</label><input id="threshold" type="number" min="0" max="100" value="8"><span>%</span></div>
+          <div class="field"><label>最小间隔</label><input id="minDist" type="number" min="1" max="100" value="12"><span>px</span></div>
+        </div>
+        <div class="hint">阈值相对于曲线动态范围；用于课堂演示，不替代专业谱线拟合。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <b>光谱曲线</b>
+      <div class="row">
+        <span class="pill" id="axisMode">横轴：像素</span>
+        <button id="exportCsv" disabled>导出 CSV</button>
+        <button id="savePlot" disabled>保存图像</button>
+      </div>
+    </div>
+    <div id="plotWrap"><canvas id="plot"></canvas></div>
+    <div id="result" class="status" style="margin-top:8px">等待分析。</div>
+    <details>
+      <summary>检测到的峰</summary>
+      <table>
+        <thead><tr><th>#</th><th id="peakXhead">位置(px)</th><th>强度</th><th>R</th><th>G</th><th>B</th></tr></thead>
+        <tbody id="peakTable"></tbody>
+      </table>
+    </details>
+  </div>
+</main>
+
+<canvas id="work" style="display:none"></canvas>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const video=$('video'), photo=$('photo'), overlay=$('overlay'), octx=overlay.getContext('2d');
+  const work=$('work'), wctx=work.getContext('2d'), plot=$('plot'), pctx=plot.getContext('2d');
+
+  let stream=null, imageReady=false, scanY=0.5, dragging=false;
+  let pendingCal=false, calPoints=[], calibration=null, flipLambda=false;
+  let spectrum=null, peaks=[];
+  const CAL_KEY='ios-spectrum-calibration-v2';
+
+  function setStatus(msg){ $('result').innerHTML=msg; }
+
+  function saveCalibration(){
+    try{
+      if(calibration && calPoints.length>=2){
+        localStorage.setItem(CAL_KEY, JSON.stringify({
+          calibration, calPoints, savedAt:new Date().toISOString(),
+          aspect: photo.naturalWidth&&photo.naturalHeight ? photo.naturalWidth/photo.naturalHeight : null
+        }));
+      }
+    }catch(e){}
+  }
+
+  function loadSavedCalibration(){
+    try{
+      const raw=localStorage.getItem(CAL_KEY); if(!raw) return;
+      const obj=JSON.parse(raw);
+      if(obj?.calibration && Array.isArray(obj?.calPoints) && obj.calPoints.length>=2){
+        calibration=obj.calibration; calPoints=obj.calPoints;
+        flipLambda=calibration.a<0;
+        calibration.savedAspect=obj.aspect||null;
+        calibration.savedAt=obj.savedAt||null;
+        $('axisMode').textContent=`横轴：波长（${calibration.a<0?'右→左增大':'左→右增大'}）`;
+      }
+    }catch(e){}
+  }
+
+  async function startCamera(){
+    try{
+      if(!navigator.mediaDevices?.getUserMedia) throw new Error("浏览器不支持 getUserMedia");
+      if(stream) stream.getTracks().forEach(t=>t.stop());
+      stream=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080}},
+        audio:false
+      });
+      video.srcObject=stream;
+      video.style.display='block'; photo.style.display='none';
+      $('shoot').disabled=false;
+      $('retake').disabled=true;
+      imageReady=false; resizeOverlay();
+    }catch(e){
+      alert("无法直接打开摄像头。iOS Safari 通常要求 HTTPS。请改用“从相册/相机选择”。\n\n"+e.message);
+    }
+  }
+
+  function capture(){
+    const vw=video.videoWidth, vh=video.videoHeight;
+    if(!vw||!vh) return;
+    work.width=vw; work.height=vh;
+    wctx.drawImage(video,0,0,vw,vh);
+    const url=work.toDataURL('image/jpeg',0.95);
+    loadPhoto(url);
+  }
+
+  function loadPhoto(url){
+    photo.onload=()=>{
+      imageReady=true;
+      video.style.display='none'; photo.style.display='block';
+      $('analyze').disabled=false; $('addCal').disabled=false; $('clearCal').disabled=false;
+      $('retake').disabled=false; $('flip').disabled=false;
+      scanY=.5; spectrum=null; peaks=[];
+      updateCalList(); resizeOverlay(); drawOverlay();
+      if(calibration){
+        let warn='';
+        const ar=photo.naturalWidth/photo.naturalHeight;
+        if(calibration.savedAspect && Math.abs(ar/calibration.savedAspect-1)>0.12){
+          warn=' <b style="color:#ffcc66">注意：新照片宽高比变化较大，旧定标可能不再可靠。</b>';
+        }
+        setStatus('照片已载入；<b>正在沿用已保存的波长定标</b>。拖动蓝线后点“分析光谱”。'+warn);
+      }else{
+        setStatus('照片已载入。拖动蓝线选择光谱中心，然后点“分析光谱”。当前尚未定标。');
+      }
+    };
+    photo.src=url;
+  }
+
+  $('fileInput').addEventListener('change', e=>{
+    const f=e.target.files?.[0]; if(!f) return;
+    const r=new FileReader(); r.onload=()=>loadPhoto(r.result); r.readAsDataURL(f);
+  });
+
+  function resizeOverlay(){
+    const r=$('stage').getBoundingClientRect();
+    const dpr=Math.max(1,window.devicePixelRatio||1);
+    overlay.width=Math.round(r.width*dpr); overlay.height=Math.round(r.height*dpr);
+    overlay.style.width=r.width+'px'; overlay.style.height=r.height+'px';
+    octx.setTransform(dpr,0,0,dpr,0,0);
+    drawOverlay();
+  }
+  window.addEventListener('resize', resizeOverlay);
+
+  function drawOverlay(){
+    const r=$('stage').getBoundingClientRect();
+    octx.clearRect(0,0,r.width,r.height);
+    if(!imageReady) return;
+    const y=scanY*r.height;
+    const bh=+$('band').value;
+    octx.fillStyle='rgba(77,163,255,.16)';
+    octx.fillRect(0,y-bh/2,r.width,bh);
+    octx.strokeStyle='#4da3ff'; octx.lineWidth=2;
+    octx.beginPath(); octx.moveTo(0,y); octx.lineTo(r.width,y); octx.stroke();
+    octx.fillStyle='#4da3ff'; octx.beginPath(); octx.arc(18,y,8,0,Math.PI*2); octx.fill();
+
+    for(let i=0;i<calPoints.length;i++){
+      const p=calPoints[i];
+      const x=p.xNorm*r.width;
+      octx.strokeStyle='#ffcc66'; octx.lineWidth=2;
+      octx.beginPath(); octx.moveTo(x,0); octx.lineTo(x,r.height); octx.stroke();
+      octx.fillStyle='#ffcc66'; octx.font='13px -apple-system,sans-serif';
+      octx.fillText(`${p.lambda.toFixed(1)} nm`,Math.min(x+4,r.width-78),18+i*16);
+    }
+    if(pendingCal){
+      octx.fillStyle='rgba(255,204,102,.95)'; octx.font='bold 14px -apple-system,sans-serif';
+      octx.fillText('点击对应谱线位置',12,r.height-16);
+    }
+  }
+
+  function pointerPos(e){
+    const r=overlay.getBoundingClientRect();
+    return {x:(e.clientX-r.left)/r.width, y:(e.clientY-r.top)/r.height};
+  }
+  overlay.addEventListener('pointerdown',e=>{
+    if(!imageReady) return;
+    const p=pointerPos(e);
+    if(pendingCal){
+      const lambda=parseFloat($('calLambda').value);
+      if(Number.isFinite(lambda)){
+        calPoints.push({xNorm:p.x,lambda});
+        pendingCal=false; updateCalList(); drawOverlay();
+        $('fitCal').disabled=calPoints.length<2;
+      }
+      return;
+    }
+    dragging=true; overlay.setPointerCapture(e.pointerId); scanY=Math.max(0,Math.min(1,p.y)); drawOverlay();
+  });
+  overlay.addEventListener('pointermove',e=>{
+    if(!dragging) return;
+    scanY=Math.max(0,Math.min(1,pointerPos(e).y)); drawOverlay();
+  });
+  overlay.addEventListener('pointerup',()=>dragging=false);
+  overlay.addEventListener('pointercancel',()=>dragging=false);
+
+  function updateCalList(){
+    if(!calPoints.length){ $('calList').textContent='尚未添加定标点。'; $('fitCal').disabled=true; return; }
+    const saved=calibration ? '<br><span style="color:#45d483">✓ 当前定标已保存；重新拍照会继续沿用。</span>' : '';
+    $('calList').innerHTML=calPoints.map((p,i)=>`${i+1}. 图像 x=${(p.xNorm*100).toFixed(1)}% → <b>${p.lambda.toFixed(1)} nm</b>`).join('<br>')+saved;
+    $('fitCal').disabled=calPoints.length<2;
+  }
+
+  function linearFit(points){
+    const n=points.length;
+    let sx=0,sy=0,sxx=0,sxy=0;
+    points.forEach(p=>{sx+=p.x;sy+=p.y;sxx+=p.x*p.x;sxy+=p.x*p.y});
+    const den=n*sxx-sx*sx;
+    if(Math.abs(den)<1e-12) return null;
+    const a=(n*sxy-sx*sy)/den, b=(sy-a*sx)/n;
+    let ss=0; points.forEach(p=>{const d=p.y-(a*p.x+b);ss+=d*d});
+    return {a,b,rms:Math.sqrt(ss/n)};
+  }
+
+  function fitCalibration(){
+    const pts=calPoints.map(p=>({x:p.xNorm,y:p.lambda}));
+    calibration=linearFit(pts);
+    if(!calibration){alert('定标点无效');return;}
+    calibration.savedAspect = photo.naturalWidth&&photo.naturalHeight ? photo.naturalWidth/photo.naturalHeight : null;
+    calibration.savedAt = new Date().toISOString();
+    flipLambda=calibration.a<0;
+    saveCalibration(); updateCalList();
+    $('axisMode').textContent=`横轴：波长（${calibration.a<0?'右→左增大':'左→右增大'}）`;
+    setStatus(`定标完成并已保存：λ = ${calibration.a.toFixed(3)} × (x/W) + ${calibration.b.toFixed(2)} nm；RMS = ${calibration.rms.toFixed(2)} nm。重新拍照会继续沿用。`);
+    if(spectrum) analyzeSpectrum();
+  }
+
+  function ensureImageInWork(){
+    if(!imageReady) return false;
+    work.width=photo.naturalWidth; work.height=photo.naturalHeight;
+    wctx.drawImage(photo,0,0,work.width,work.height);
+    return true;
+  }
+
+  function movingAverage(arr,n){
+    n=Math.max(1,Math.round(n)); if(n%2===0)n++;
+    if(n<=1) return arr.slice();
+    const out=new Array(arr.length), half=(n-1)/2;
+    let sum=0,count=0,L=0,R=-1;
+    for(let i=0;i<arr.length;i++){
+      const wantL=Math.max(0,i-half), wantR=Math.min(arr.length-1,i+half);
+      while(R<wantR){R++;sum+=arr[R];count++}
+      while(L<wantL){sum-=arr[L];count--;L++}
+      out[i]=sum/count;
+    }
+    return out;
+  }
+
+  function analyzeSpectrum(){
+    if(!ensureImageInWork()) return;
+    const W=work.width,H=work.height;
+    const yc=Math.round(scanY*(H-1));
+    const band=Math.max(1,Math.round(+$('band').value * H / Math.max(1,$('stage').clientHeight)));
+    const y0=Math.max(0,yc-Math.floor(band/2)), y1=Math.min(H-1,yc+Math.floor(band/2));
+    const data=wctx.getImageData(0,y0,W,y1-y0+1).data;
+    const rows=y1-y0+1;
+    let I=new Array(W).fill(0), R=new Array(W).fill(0), G=new Array(W).fill(0), B=new Array(W).fill(0);
+
+    for(let x=0;x<W;x++){
+      let sr=0,sg=0,sb=0;
+      for(let yy=0;yy<rows;yy++){
+        const k=(yy*W+x)*4; sr+=data[k];sg+=data[k+1];sb+=data[k+2];
+      }
+      sr/=rows;sg/=rows;sb/=rows;
+      R[x]=sr;G[x]=sg;B[x]=sb;
+      I[x]=0.2126*sr+0.7152*sg+0.0722*sb;
+    }
+    const sm=+$('smooth').value||1;
+    const Is=movingAverage(I,sm), Rs=movingAverage(R,sm), Gs=movingAverage(G,sm), Bs=movingAverage(B,sm);
+    spectrum={I:Is,R:Rs,G:Gs,B:Bs,W};
+    peaks=findPeaks(Is);
+    drawPlot();
+    fillPeakTable();
+    $('exportCsv').disabled=false; $('savePlot').disabled=false;
+    setStatus(`已分析 <b>${W}</b> 个横向采样点，垂直平均约 <b>${rows}</b> 像素；检测到 <b>${peaks.length}</b> 个主要峰。`+
+      (calibration?` 当前已应用波长定标。`:` 当前横轴仍是像素；添加至少两个定标点后可转换为 nm。`));
+  }
+
+  function findPeaks(a){
+    const minD=Math.max(1,+$('minDist').value||12);
+    const mn=Math.min(...a), mx=Math.max(...a), dyn=Math.max(1,mx-mn);
+    const thr=mn+(+$('threshold').value||8)/100*dyn;
+    let cand=[];
+    for(let i=1;i<a.length-1;i++){
+      if(a[i]>=a[i-1] && a[i]>a[i+1] && a[i]>=thr) cand.push(i);
+    }
+    cand.sort((i,j)=>a[j]-a[i]);
+    let keep=[];
+    for(const i of cand) if(keep.every(j=>Math.abs(i-j)>=minD)) keep.push(i);
+    return keep.sort((a,b)=>a-b).slice(0,30);
+  }
+
+  function wavelength(x){
+    if(!calibration) return null;
+    const W=spectrum?.W || photo.naturalWidth || 1;
+    const xn=W>1 ? x/(W-1) : 0;
+    return calibration.a*xn+calibration.b;
+  }
+
+  function drawPlot(){
+    const rect=plot.getBoundingClientRect(), dpr=Math.max(1,devicePixelRatio||1);
+    plot.width=Math.round(rect.width*dpr); plot.height=Math.round(rect.height*dpr);
+    pctx.setTransform(dpr,0,0,dpr,0,0);
+    const W=rect.width,H=rect.height;
+    pctx.clearRect(0,0,W,H); pctx.fillStyle='#090c10'; pctx.fillRect(0,0,W,H);
+    if(!spectrum) return;
+    const m={l:48,r:14,t:18,b:36}, pw=W-m.l-m.r, ph=H-m.t-m.b;
+    const a=spectrum.I, amin=Math.min(...a), amax=Math.max(...a), dyn=Math.max(1,amax-amin);
+
+    pctx.strokeStyle='#26303b'; pctx.lineWidth=1; pctx.font='11px -apple-system,sans-serif'; pctx.fillStyle='#9aa6b2';
+    for(let j=0;j<=4;j++){
+      const y=m.t+ph*j/4; pctx.beginPath();pctx.moveTo(m.l,y);pctx.lineTo(W-m.r,y);pctx.stroke();
+      const v=amax-dyn*j/4; pctx.fillText(v.toFixed(0),4,y+4);
+    }
+    const ticks=6;
+    for(let j=0;j<=ticks;j++){
+      const x=m.l+pw*j/ticks; pctx.beginPath();pctx.moveTo(x,m.t);pctx.lineTo(x,m.t+ph);pctx.stroke();
+      const pix=(spectrum.W-1)*j/ticks;
+      const lab=calibration?wavelength(pix).toFixed(0):pix.toFixed(0);
+      pctx.fillText(lab,x-12,H-12);
+    }
+    pctx.fillText(calibration?'λ (nm)':'x (pixel)',W/2-20,H-2);
+
+    // faint RGB channels
+    const channels=[[spectrum.R,'rgba(255,100,100,.34)'],[spectrum.G,'rgba(100,255,130,.34)'],[spectrum.B,'rgba(100,150,255,.34)']];
+    for(const [arr,col] of channels){
+      pctx.strokeStyle=col;pctx.lineWidth=1;
+      pctx.beginPath();
+      for(let i=0;i<arr.length;i++){
+        const x=m.l+pw*i/(arr.length-1);
+        const y=m.t+ph*(1-arr[i]/255);
+        i?pctx.lineTo(x,y):pctx.moveTo(x,y);
+      } pctx.stroke();
+    }
+    pctx.strokeStyle='#f4f7fb';pctx.lineWidth=2;pctx.beginPath();
+    for(let i=0;i<a.length;i++){
+      const x=m.l+pw*i/(a.length-1), y=m.t+ph*(1-(a[i]-amin)/dyn);
+      i?pctx.lineTo(x,y):pctx.moveTo(x,y);
+    } pctx.stroke();
+
+    pctx.font='12px -apple-system,sans-serif';
+    peaks.forEach((i,k)=>{
+      const x=m.l+pw*i/(a.length-1), y=m.t+ph*(1-(a[i]-amin)/dyn);
+      pctx.fillStyle='#ffcc66';pctx.beginPath();pctx.arc(x,y,3.5,0,Math.PI*2);pctx.fill();
+      const lab=calibration?`${wavelength(i).toFixed(1)}`:`${i}`;
+      pctx.fillText(lab,Math.min(x+4,W-48),Math.max(14,y-7));
+    });
+  }
+
+  function fillPeakTable(){
+    $('peakXhead').textContent=calibration?'λ (nm)':'位置(px)';
+    $('peakTable').innerHTML=peaks.map((i,k)=>{
+      const x=calibration?wavelength(i).toFixed(2):i;
+      return `<tr><td>${k+1}</td><td>${x}</td><td>${spectrum.I[i].toFixed(1)}</td><td>${spectrum.R[i].toFixed(0)}</td><td>${spectrum.G[i].toFixed(0)}</td><td>${spectrum.B[i].toFixed(0)}</td></tr>`;
+    }).join('');
+  }
+
+  function exportCSV(){
+    if(!spectrum)return;
+    const rows=[['pixel','wavelength_nm','intensity','R','G','B'].join(',')];
+    for(let i=0;i<spectrum.W;i++){
+      rows.push([i, calibration?wavelength(i).toFixed(4):'', spectrum.I[i].toFixed(4),
+        spectrum.R[i].toFixed(4),spectrum.G[i].toFixed(4),spectrum.B[i].toFixed(4)].join(','));
+    }
+    downloadBlob(new Blob([rows.join('\n')],{type:'text/csv'}),'spectrum.csv');
+  }
+  function savePlot(){
+    const a=document.createElement('a');a.href=plot.toDataURL('image/png');a.download='spectrum_plot.png';a.click();
+  }
+  function downloadBlob(blob,name){
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  }
+
+  $('startCam').onclick=startCamera;
+  $('shoot').onclick=capture;
+  $('retake').onclick=()=>{ imageReady=false; photo.style.display='none'; video.style.display='block'; $('analyze').disabled=true; resizeOverlay(); };
+  $('band').oninput=()=>{$('bandVal').textContent=$('band').value+' px';drawOverlay()};
+  $('analyze').onclick=analyzeSpectrum;
+  $('addCal').onclick=()=>{
+    if(calibration && calPoints.length>=2){
+      // starting a new calibration: clear old points/fit only after explicit add action
+      calPoints=[]; calibration=null; try{localStorage.removeItem(CAL_KEY)}catch(e){}; updateCalList(); $('axisMode').textContent='横轴：像素';
+    }
+    pendingCal=true;drawOverlay()
+  };
+  $('fitCal').onclick=fitCalibration;
+  $('clearCal').onclick=()=>{calPoints=[];calibration=null;pendingCal=false;try{localStorage.removeItem(CAL_KEY)}catch(e){};updateCalList();$('axisMode').textContent='横轴：像素';drawOverlay();setStatus('已清除保存的定标。下一张照片需要重新定标。');if(spectrum){drawPlot();fillPeakTable()}};
+  $('flip').onclick=()=>{
+    if(!calibration){ alert('请先做波长定标。'); return; }
+    // For normalized x in [0,1]: lambda'(x)=lambda(1-x)
+    calibration={...calibration,a:-calibration.a,b:calibration.a+calibration.b};
+    saveCalibration();
+    $('axisMode').textContent=`横轴：波长（${calibration.a<0?'右→左增大':'左→右增大'}）`;
+    updateCalList();
+    if(spectrum){drawPlot();fillPeakTable()}
+  };
+  $('smooth').onchange=()=>spectrum&&analyzeSpectrum();
+  $('threshold').onchange=()=>spectrum&&analyzeSpectrum();
+  $('minDist').onchange=()=>spectrum&&analyzeSpectrum();
+  $('exportCsv').onclick=exportCSV;
+  $('savePlot').onclick=savePlot;
+
+  loadSavedCalibration(); updateCalList(); resizeOverlay();
+})();
+</script>
+</body>
+</html>
